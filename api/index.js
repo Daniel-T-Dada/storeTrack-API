@@ -1,7 +1,9 @@
+
 const express = require("express");
 const mongoose = require("mongoose");
 const swaggerJsdoc = require("swagger-jsdoc");
 const swaggerUi = require("swagger-ui-express");
+const path = require("path");
 require("dotenv").config();
 
 const app = express();
@@ -11,7 +13,7 @@ app.use(express.json());
 let conn = null;
 async function connectDB() {
   if (conn == null) {
-    conn = await mongoose.connect(process.env.MONGO_URI);
+    conn = await mongoose.connect(process.env. MONGO_URI);
     console.log("MongoDB connected");
   }
   return conn;
@@ -20,12 +22,12 @@ async function connectDB() {
 // Connect to DB
 connectDB().catch(err => console.error("MongoDB connection error:", err));
 
-// Routes
-app.use("/api/auth", require("../routes/auth"));
-app.use("/api/products", require("../routes/products"));
-app.use("/api/staff", require("../routes/staff"));
-app.use("/api/sales", require("../routes/sales"));
-app.use("/api/reports", require("../routes/reports"));
+// Routes - Use path.join for proper resolution
+app.use("/api/auth", require(path.join(__dirname, "../routes/auth")));
+app.use("/api/products", require(path.join(__dirname, "../routes/products")));
+app.use("/api/staff", require(path.join(__dirname, "../routes/staff")));
+app.use("/api/sales", require(path.join(__dirname, "../routes/sales")));
+app.use("/api/reports", require(path.join(__dirname, "../routes/reports")));
 
 // Swagger setup
 const swaggerOptions = {
@@ -35,11 +37,12 @@ const swaggerOptions = {
     components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" } } },
     security: [{ bearerAuth: [] }],
   },
-  apis: ["./routes/*.js"],
+  apis: [path.join(__dirname, "../routes/*.js")],
 };
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
-// Welcome route (ADD THIS)
+
+// Welcome route
 app.get("/", (req, res) => {
   res.json({
     message: "Welcome to StoreTrack API",
@@ -54,6 +57,7 @@ app.get("/", (req, res) => {
     }
   });
 });
+
 // 404 handler
 app.use((req, res) => res.status(404).json({ message: "Route not found" }));
 
