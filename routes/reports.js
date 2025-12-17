@@ -1,7 +1,9 @@
+// routes/reports.js
 const express = require("express");
 const router = express.Router();
 const { authMiddleware } = require("../middleware/auth");
 
+// Import all report controller methods
 const {
   getSalesByStaff,
   getTotalSales,
@@ -18,22 +20,12 @@ const {
  *   description: Sales, profit & analytics reports
  */
 
-// Route: Get total sales grouped by staff
+// Routes using controller methods
 router.get("/sales-by-staff", authMiddleware, getSalesByStaff);
-
-// Route: Get total sales amount
 router.get("/total-sales", authMiddleware, getTotalSales);
-
-// Route: Get products with low stock
 router.get("/low-stock", authMiddleware, getLowStock);
-
-// Route: Get total revenue, profit and margin
 router.get("/profit", authMiddleware, getProfit);
-
-// Route: Profit per product
 router.get("/profit-by-product", authMiddleware, getProfitByProduct);
-
-// Route: Profit per staff
 router.get("/profit-by-staff", authMiddleware, getProfitByStaff);
 
 module.exports = router;
