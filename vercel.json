@@ -15,5 +15,5 @@
       "src": "/api/docs",
       "dest": "api/index.js"
     }
-  ],
+  ]
 }
