@@ -16,7 +16,4 @@
       "dest": "api/index.js"
     }
   ],
-  "env": {
-    "JWT_SECRET": "@jwt_secret"
-  }
 }
