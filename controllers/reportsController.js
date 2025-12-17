@@ -1,13 +1,23 @@
 const Sale = require("../models/Sale");
 const Product = require("../models/Product");
+const Staff = require("../models/Staff");
 
 /**
- * GET /api/reports/sales-by-staff
+ * Get total sales grouped by staff
  */
 exports.getSalesByStaff = async (req, res) => {
   try {
-    const data = await Sale.aggregate([
-      { $match: { store: req.user._id } },
+    const { startDate, endDate } = req.query;
+    const match = { store: req.user._id };
+
+    if (startDate || endDate) {
+      match.createdAt = {};
+      if (startDate) match.createdAt.$gte = new Date(startDate);
+      if (endDate) match.createdAt.$lte = new Date(endDate);
+    }
+
+    const report = await Sale.aggregate([
+      { $match: match },
       {
         $group: {
           _id: "$staff",
@@ -15,16 +25,34 @@ exports.getSalesByStaff = async (req, res) => {
           totalQuantity: { $sum: "$quantity" },
         },
       },
+      {
+        $lookup: {
+          from: "staffs",
+          localField: "_id",
+          foreignField: "_id",
+          as: "staff",
+        },
+      },
+      { $unwind: "$staff" },
+      {
+        $project: {
+          _id: 0,
+          staffId: "$staff._id",
+          staffName: "$staff.name",
+          totalSales: 1,
+          totalQuantity: 1,
+        },
+      },
     ]);
 
-    res.json(data);
+    res.json(report);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
 /**
- * GET /api/reports/total-sales
+ * Get total sales value
  */
 exports.getTotalSales = async (req, res) => {
   try {
@@ -40,7 +68,7 @@ exports.getTotalSales = async (req, res) => {
 };
 
 /**
- * GET /api/reports/low-stock
+ * Get low stock products
  */
 exports.getLowStock = async (req, res) => {
   try {
@@ -56,7 +84,7 @@ exports.getLowStock = async (req, res) => {
 };
 
 /**
- * GET /api/reports/profit
+ * Get total revenue, profit, and margin
  */
 exports.getProfit = async (req, res) => {
   try {
@@ -73,7 +101,7 @@ exports.getProfit = async (req, res) => {
 
     const revenue = result[0]?.revenue || 0;
     const profit = result[0]?.profit || 0;
-    const margin = revenue ? ((profit / revenue) * 100).toFixed(2) : 0;
+    const margin = revenue > 0 ? ((profit / revenue) * 100).toFixed(2) : 0;
 
     res.json({ revenue, profit, margin });
   } catch (err) {
@@ -82,11 +110,11 @@ exports.getProfit = async (req, res) => {
 };
 
 /**
- * GET /api/reports/profit-by-product
+ * Get profit per product
  */
 exports.getProfitByProduct = async (req, res) => {
   try {
-    const data = await Sale.aggregate([
+    const report = await Sale.aggregate([
       { $match: { store: req.user._id } },
       {
         $group: {
@@ -95,26 +123,88 @@ exports.getProfitByProduct = async (req, res) => {
           profit: { $sum: "$profit" },
         },
       },
+      {
+        $lookup: {
+          from: "products",
+          localField: "_id",
+          foreignField: "_id",
+          as: "product",
+        },
+      },
+      { $unwind: "$product" },
+      {
+        $project: {
+          _id: 0,
+          productId: "$product._id",
+          productName: "$product.name",
+          revenue: 1,
+          profit: 1,
+        },
+      },
     ]);
 
-    res.json(data);
+    res.json(report);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
 /**
- * GET /api/reports/profit-by-staff
+ * Get profit per staff
  */
 exports.getProfitByStaff = async (req, res) => {
   try {
     const data = await Sale.aggregate([
       { $match: { store: req.user._id } },
+
+      {
+        $lookup: {
+          from: "products",
+          localField: "product",
+          foreignField: "_id",
+          as: "product",
+        },
+      },
+      { $unwind: "$product" },
+
+      {
+        $addFields: {
+          profit: {
+            $subtract: [
+              "$totalPrice",
+              { $multiply: ["$product.costPrice", "$quantity"] },
+            ],
+          },
+        },
+      },
+
       {
         $group: {
           _id: "$staff",
           totalProfit: { $sum: "$profit" },
           totalSalesAmount: { $sum: "$totalPrice" },
+          totalItemsSold: { $sum: "$quantity" },
+        },
+      },
+
+      {
+        $lookup: {
+          from: "staffs",
+          localField: "_id",
+          foreignField: "_id",
+          as: "staff",
+        },
+      },
+      { $unwind: "$staff" },
+
+      {
+        $project: {
+          _id: 0,
+          staffId: "$staff._id",
+          staffName: "$staff.name",
+          totalProfit: 1,
+          totalSalesAmount: 1,
+          totalItemsSold: 1,
         },
       },
     ]);
