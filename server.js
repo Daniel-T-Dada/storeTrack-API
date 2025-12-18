@@ -76,6 +76,15 @@ const swaggerOptions = {
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
 
+// Swagger UI uses relative asset URLs; ensure trailing slash so assets resolve under /api-docs/
+const redirectToTrailingSlash = (req, res) => {
+  const [pathname, queryString] = req.originalUrl.split("?");
+  const target = `${pathname}/` + (queryString ? `?${queryString}` : "");
+  res.redirect(301, target);
+};
+
+app.get(["/api-docs", "/api/api-docs"], redirectToTrailingSlash);
+
 // Expose raw spec for debugging (useful on serverless/proxies)
 app.get(["/api-docs/swagger.json", "/api/api-docs/swagger.json"], (req, res) => {
   res.json(swaggerDocs);
