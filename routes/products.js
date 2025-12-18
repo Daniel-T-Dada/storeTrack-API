@@ -43,8 +43,8 @@ const { authMiddleware } = require("../middleware/auth");
  *                 type: integer
  *                 example: 10
  *               lowStockThreshold:
- *                type: integer
- *                example: 5
+ *                 type: integer
+ *                 example: 5
  *               description:
  *                 type: string
  *                 example: Fresh milk from local farm
@@ -128,9 +128,9 @@ router.get("/", authMiddleware, async (req, res) => {
  *               quantity:
  *                 type: integer
  *                 example: 15
- *              lowStockThreshold:
- *                type: integer
- *                example: 5
+ *               lowStockThreshold:
+ *                 type: integer
+ *                 example: 5
  *               description:
  *                 type: string
  *                 example: Updated description

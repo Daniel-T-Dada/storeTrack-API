@@ -8,6 +8,8 @@ const swaggerUi = require("swagger-ui-express");
 dotenv.config();
 const app = express();
 
+app.set("trust proxy", true);
+
 // Middleware
 app.use(express.json());
 
@@ -21,14 +23,33 @@ async function connectDB() {
   return conn;
 }
 
-connectDB().catch(err => console. error("MongoDB connection error:", err));
+connectDB().catch(err => console.error("MongoDB connection error:", err));
 
 // Routes
-app.use("/api/auth", require("./routes/auth"));
-app.use("/api/products", require("./routes/products"));
-app.use("/api/staff", require("./routes/staff"));
-app.use("/api/sales", require("./routes/sales"));
-app.use("/api/reports", require("./routes/reports"));
+const joinBasePath = (basePath, subPath) => {
+  const base = (basePath || "").trim();
+  if (!base) return subPath;
+  return `${base}${subPath}`;
+};
+
+const apiBasePaths = Array.from(
+  new Set([
+    process.env.API_BASE_PATH,
+    "/api",
+    "",
+  ].map(v => (v ?? "").trim()))
+).filter(Boolean);
+
+// Always include empty base path (root) as a fallback.
+if (!apiBasePaths.includes("")) apiBasePaths.push("");
+
+for (const basePath of apiBasePaths) {
+  app.use(joinBasePath(basePath, "/auth"), require("./routes/auth"));
+  app.use(joinBasePath(basePath, "/products"), require("./routes/products"));
+  app.use(joinBasePath(basePath, "/staff"), require("./routes/staff"));
+  app.use(joinBasePath(basePath, "/sales"), require("./routes/sales"));
+  app.use(joinBasePath(basePath, "/reports"), require("./routes/reports"));
+}
 
 // Swagger setup
 const swaggerOptions = {
@@ -54,7 +75,15 @@ const swaggerOptions = {
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
+
+// Expose raw spec for debugging (useful on serverless/proxies)
+app.get(["/api-docs/swagger.json", "/api/api-docs/swagger.json"], (req, res) => {
+  res.json(swaggerDocs);
+});
+
+// Serve Swagger UI from common base paths
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+app.use("/api/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
 // Welcome route
 app.get("/", (req, res) => {
@@ -65,7 +94,7 @@ app.get("/", (req, res) => {
       authentication: "/api/auth",
       products: "/api/products",
       staff: "/api/staff",
-      sales:  "/api/sales",
+      sales: "/api/sales",
       reports: "/api/reports",
       documentation: "/api-docs"
     }
@@ -73,13 +102,13 @@ app.get("/", (req, res) => {
 });
 
 // 404 handler
-app. use((req, res) => {
+app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error(err. stack);
+  console.error(err.stack);
   res.status(500).json({ message: "Something went wrong!", error: err.message });
 });
 
