@@ -1,0 +1,146 @@
+@baseUrl = https://store-track-api.vercel.app
+# @baseUrl = http://localhost:5000
+
+@email = online@example.com
+@password = secure1234
+@storeId = 507f1f77bcf86cd799439011
+
+
+### Register (may return 400 if user exists)
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "name": "Test",
+  "email": "{{email}}",
+  "password": "{{password}}",
+  "store": "{{storeId}}"
+}
+
+
+### Login
+# @name login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+
+### Refresh token
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{login.response.body.tokens.refreshToken}}"
+}
+
+
+### Create product
+# @name createProduct
+POST {{baseUrl}}/api/products
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Milk",
+  "price": 500,
+  "costPrice": 350,
+  "quantity": 10,
+  "lowStockThreshold": 5,
+  "description": "Fresh milk"
+}
+
+
+### List products
+GET {{baseUrl}}/api/products
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Update product
+PUT {{baseUrl}}/api/products/{{createProduct.response.body._id}}
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+Content-Type: application/json
+
+{
+  "price": 550,
+  "quantity": 15,
+  "description": "Updated description"
+}
+
+
+### Create staff
+# @name createStaff
+POST {{baseUrl}}/api/staff
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Jane",
+  "role": "cashier"
+}
+
+
+### List staff
+GET {{baseUrl}}/api/staff
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Record sale
+POST {{baseUrl}}/api/sales
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+Content-Type: application/json
+
+{
+  "product": "{{createProduct.response.body._id}}",
+  "staff": "{{createStaff.response.body._id}}",
+  "quantity": 2,
+  "totalPrice": 1000
+}
+
+
+### List sales
+GET {{baseUrl}}/api/sales
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Reports: total sales
+GET {{baseUrl}}/api/reports/total-sales
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Reports: sales by staff
+GET {{baseUrl}}/api/reports/sales-by-staff
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Reports: low stock
+GET {{baseUrl}}/api/reports/low-stock
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Reports: profit (profit is computed only in some reports)
+GET {{baseUrl}}/api/reports/profit
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Reports: profit by product
+GET {{baseUrl}}/api/reports/profit-by-product
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Reports: profit by staff
+GET {{baseUrl}}/api/reports/profit-by-staff
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Delete staff
+DELETE {{baseUrl}}/api/staff/{{createStaff.response.body._id}}
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Delete product
+DELETE {{baseUrl}}/api/products/{{createProduct.response.body._id}}
+Authorization: Bearer {{login.response.body.tokens.accessToken}}

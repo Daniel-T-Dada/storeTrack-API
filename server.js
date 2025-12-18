@@ -2,6 +2,7 @@
 const express = require("express");
 const dotenv = require("dotenv");
 const mongoose = require("mongoose");
+const cors = require("cors");
 const swaggerJsdoc = require("swagger-jsdoc");
 const swaggerUi = require("swagger-ui-express");
 
@@ -11,6 +12,56 @@ const app = express();
 app.set("trust proxy", true);
 
 // Middleware
+const parseCorsOrigins = (value) => {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+};
+
+const corsOrigins = parseCorsOrigins(process.env.CORS_ORIGINS);
+
+// Helpful defaults for local dev (Swagger UI is served from this same server)
+const devDefaultOrigins = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:5000",
+  "http://127.0.0.1:5000",
+];
+
+const allowedOrigins = new Set(corsOrigins);
+if (process.env.NODE_ENV !== "production") {
+  for (const origin of devDefaultOrigins) allowedOrigins.add(origin);
+}
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow non-browser requests (no Origin header) like Postman/REST Client
+    if (!origin) return callback(null, true);
+
+    // If not configured, default to allowing all origins (dev-friendly)
+    if (corsOrigins.length === 0) return callback(null, true);
+
+    // Allow configured origins (+ dev defaults)
+    if (allowedOrigins.has(origin)) return callback(null, true);
+
+    // Deny without throwing (prevents noisy stack traces)
+    return callback(null, false);
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+
+// Explicitly handle preflight (Express v5 doesn't accept "*" path here)
+app.options(/.*/, cors(corsOptions));
+
 app.use(express.json());
 
 // Connect to MongoDB (serverless-friendly)
@@ -92,21 +143,42 @@ app.get(["/api-docs/swagger.json", "/api/api-docs/swagger.json"], (req, res) => 
 
 // Serve Swagger UI from common base paths
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
-app.use("/api/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
 // Welcome route
 app.get("/", (req, res) => {
   res.json({
     message: "Welcome to StoreTrack API",
     version: "1.0.0",
-    endpoints: {
-      authentication: "/api/auth",
-      products: "/api/products",
-      staff: "/api/staff",
-      sales: "/api/sales",
-      reports: "/api/reports",
-      documentation: "/api-docs"
-    }
+    note: "Most endpoints require an Authorization Bearer token. This server also mounts routes at the root (without /api) as a fallback; prefer the /api paths.",
+    docs: {
+      swaggerUi: ["/api-docs/"],
+    },
+    endpoints: [
+      { method: "POST", path: "/api/auth/register", auth: false },
+      { method: "POST", path: "/api/auth/login", auth: false },
+      { method: "POST", path: "/api/auth/refresh", auth: false },
+      { method: "POST", path: "/api/auth/forgot-password", auth: false },
+      { method: "POST", path: "/api/auth/reset-password/:token", auth: false },
+
+      { method: "POST", path: "/api/products", auth: true },
+      { method: "GET", path: "/api/products", auth: true },
+      { method: "PUT", path: "/api/products/:id", auth: true },
+      { method: "DELETE", path: "/api/products/:id", auth: true },
+
+      { method: "POST", path: "/api/staff", auth: true },
+      { method: "GET", path: "/api/staff", auth: true },
+      { method: "DELETE", path: "/api/staff/:id", auth: true },
+
+      { method: "POST", path: "/api/sales", auth: true },
+      { method: "GET", path: "/api/sales", auth: true },
+
+      { method: "GET", path: "/api/reports/sales-by-staff", auth: true },
+      { method: "GET", path: "/api/reports/total-sales", auth: true },
+      { method: "GET", path: "/api/reports/low-stock", auth: true },
+      { method: "GET", path: "/api/reports/profit", auth: true },
+      { method: "GET", path: "/api/reports/profit-by-product", auth: true },
+      { method: "GET", path: "/api/reports/profit-by-staff", auth: true },
+    ],
   });
 });
 
