@@ -178,9 +178,9 @@ router.post(
               .session(session);
 
             if (!existing) {
-              const err = new Error("Product not found");
+              const err = new Error("Product not found in this store");
               err.status = 404;
-              err.details = { productId };
+              err.details = { productId, storeId: String(req.storeId) };
               throw err;
             }
 
@@ -196,7 +196,20 @@ router.post(
           }
 
           const unitPrice = Number(productDoc.price);
-          const unitCostPrice = Number(productDoc.costPrice);
+          if (!Number.isFinite(unitPrice)) {
+            const err = new Error("Invalid product pricing");
+            err.status = 400;
+            err.details = {
+              productId,
+              field: "price",
+              value: productDoc.price,
+              message: "Product price must be a valid number",
+            };
+            throw err;
+          }
+
+          const unitCostCandidate = Number(productDoc.costPrice);
+          const unitCostPrice = Number.isFinite(unitCostCandidate) ? unitCostCandidate : null;
           const totalPrice = unitPrice * qty;
           serverTotal += totalPrice;
 
@@ -289,7 +302,12 @@ router.post(
 
       if (!productDoc) {
         const existing = await Product.findOne({ _id: product, store: req.storeId }).select("name quantity");
-        if (!existing) return res.status(404).json({ message: "Product not found" });
+        if (!existing) {
+          return res.status(404).json({
+            message: "Product not found in this store",
+            details: { productId: product, storeId: String(req.storeId) },
+          });
+        }
         return res.status(400).json({
           message: "Insufficient stock",
           details: { productId: product, productName: existing.name, available: existing.quantity, requested: quantity },
@@ -297,7 +315,20 @@ router.post(
       }
 
       const unitPrice = Number(productDoc.price);
-      const unitCostPrice = Number(productDoc.costPrice);
+      if (!Number.isFinite(unitPrice)) {
+        return res.status(400).json({
+          message: "Invalid product pricing",
+          details: {
+            productId: product,
+            field: "price",
+            value: productDoc.price,
+            message: "Product price must be a valid number",
+          },
+        });
+      }
+
+      const unitCostCandidate = Number(productDoc.costPrice);
+      const unitCostPrice = Number.isFinite(unitCostCandidate) ? unitCostCandidate : null;
       const totalPrice = unitPrice * Number(quantity);
       const transactionId = new mongoose.Types.ObjectId();
 

@@ -38,6 +38,35 @@ GET {{baseUrl}}/api/auth/me
 Authorization: Bearer {{login.response.body.tokens.accessToken}}
 
 
+### Update profile (URL/data URI)
+PATCH {{baseUrl}}/api/auth/me
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+Content-Type: application/json
+
+{
+  "profileImage": "https://example.com/pic.jpg"
+}
+
+
+### Forgot password (returns reset token for testing)
+# @name forgotPassword
+POST {{baseUrl}}/api/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "{{email}}"
+}
+
+
+### Reset password (uses token from forgot-password)
+POST {{baseUrl}}/api/auth/reset-password/{{forgotPassword.response.body.resetToken}}
+Content-Type: application/json
+
+{
+  "password": "secure1234"
+}
+
+
 ### Refresh token
 POST {{baseUrl}}/api/auth/refresh
 Content-Type: application/json
@@ -54,12 +83,12 @@ Authorization: Bearer {{login.response.body.tokens.accessToken}}
 Content-Type: application/json
 
 {
-  "name": "Bottle of Groundnuts",
+  "name": "Battery",
   "price": 600,
   "costPrice": 200,
   "quantity": 10,
   "lowStockThreshold": 5,
-  "description": "Groundnuts in a bottle"
+  "description": "Battery for electronic devices"
 }
 
 
@@ -74,10 +103,25 @@ Authorization: Bearer {{login.response.body.tokens.accessToken}}
 Content-Type: application/json
 
 {
-  # "price": 550,
+  "price": 550,
   "quantity": 15,
   "description": "Updated description"
 }
+
+
+### Product search (name/SKU/barcode)
+GET {{baseUrl}}/api/products/search?q=ground&limit=20
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Product lookup by SKU
+GET {{baseUrl}}/api/products/lookup?sku=SKU-001
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Product lookup by barcode
+GET {{baseUrl}}/api/products/lookup?barcode=1234567890123
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
 
 
 ### Create staff
@@ -91,6 +135,35 @@ Content-Type: application/json
   "email": "{{staffEmail}}",
   "password": "{{staffPassword}}",
   "role": "staff"
+}
+
+
+### Staff login
+# @name staffLogin
+POST {{baseUrl}}/api/staff-auth/login
+Content-Type: application/json
+
+{
+  "email": "{{staffEmail}}",
+  "password": "{{staffPassword}}"
+}
+
+
+### Staff refresh (body-based)
+POST {{baseUrl}}/api/staff-auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{staffLogin.response.body.tokens.refreshToken}}"
+}
+
+
+### Staff logout (body-based)
+POST {{baseUrl}}/api/staff-auth/logout
+Content-Type: application/json
+
+{
+  "refreshToken": "{{staffLogin.response.body.tokens.refreshToken}}"
 }
 
 
@@ -129,6 +202,8 @@ Authorization: Bearer {{login.response.body.tokens.accessToken}}
 
 
 ### Record sale
+# Note: For admin/manager, staff is required. For staff users, staff is auto-assigned.
+# @name createSale
 POST {{baseUrl}}/api/sales
 Authorization: Bearer {{login.response.body.tokens.accessToken}}
 Content-Type: application/json
@@ -140,8 +215,58 @@ Content-Type: application/json
 }
 
 
+### Checkout (multi-item, atomic)
+# @name checkout
+POST {{baseUrl}}/api/sales/checkout
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+Content-Type: application/json
+
+{
+  "staff": "{{createStaff.response.body._id}}",
+  "items": [
+    {
+      "product": "{{createProduct.response.body._id}}",
+      "quantity": 2
+    }
+  ],
+  "client": {
+    "expectedTotal": 1100
+  }
+}
+
+
 ### List sales
 GET {{baseUrl}}/api/sales
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### List sales (filtered/paginated example)
+GET {{baseUrl}}/api/sales?limit=20&page=1&sort=-createdAt
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### List transaction summaries
+GET {{baseUrl}}/api/sales/transactions?limit=20&page=1
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Transaction details (from checkout)
+GET {{baseUrl}}/api/sales/transactions/{{checkout.response.body.transaction.id}}
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Transaction receipt (from checkout)
+GET {{baseUrl}}/api/sales/transactions/{{checkout.response.body.transaction.id}}/receipt
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Transaction details (from single sale)
+GET {{baseUrl}}/api/sales/transactions/{{createSale.response.body.transactionId}}
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Transaction receipt (from single sale)
+GET {{baseUrl}}/api/sales/transactions/{{createSale.response.body.transactionId}}/receipt
 Authorization: Bearer {{login.response.body.tokens.accessToken}}
 
 
