@@ -21,9 +21,24 @@ const userSchema = new mongoose.Schema(
       minlength: 6,
       select: false
     },
+    role: {
+      type: String,
+      enum: ["admin", "manager"],
+      default: "admin",
+      required: true,
+    },
+    profileImage: {
+      type: String,
+      trim: true,
+    },
+    profileImagePublicId: {
+      type: String,
+      trim: true,
+      select: false,
+    },
     store: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Store"
+      type: String,
+      trim: true
     },
     refreshToken: {
       type: String,

@@ -8,7 +8,7 @@ const Staff = require("../models/Staff");
 exports.getSalesByStaff = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const match = { store: req.user._id };
+    const match = { store: req.storeId };
 
     if (startDate || endDate) {
       match.createdAt = {};
@@ -57,11 +57,22 @@ exports.getSalesByStaff = async (req, res) => {
 exports.getTotalSales = async (req, res) => {
   try {
     const result = await Sale.aggregate([
-      { $match: { store: req.user._id } },
-      { $group: { _id: null, totalSales: { $sum: "$totalPrice" } } },
+      { $match: { store: req.storeId } },
+      {
+        $group: {
+          _id: null,
+          totalSales: { $sum: "$totalPrice" },
+          totalRevenue: { $sum: "$totalPrice" },
+          totalTransactions: { $sum: 1 },
+        },
+      },
     ]);
 
-    res.json({ totalSales: result[0]?.totalSales || 0 });
+    res.json({
+      totalSales: result[0]?.totalSales || 0,
+      totalRevenue: result[0]?.totalRevenue || 0,
+      totalTransactions: result[0]?.totalTransactions || 0,
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -73,7 +84,7 @@ exports.getTotalSales = async (req, res) => {
 exports.getLowStock = async (req, res) => {
   try {
     const products = await Product.find({
-      store: req.user._id,
+      store: req.storeId,
       $expr: { $lte: ["$quantity", "$lowStockThreshold"] },
     }).sort({ quantity: 1 });
 
@@ -89,21 +100,46 @@ exports.getLowStock = async (req, res) => {
 exports.getProfit = async (req, res) => {
   try {
     const result = await Sale.aggregate([
-      { $match: { store: req.user._id } },
+      { $match: { store: req.storeId } },
+
+      {
+        $lookup: {
+          from: "products",
+          localField: "product",
+          foreignField: "_id",
+          as: "product",
+        },
+      },
+      { $unwind: "$product" },
+
+      {
+        $addFields: {
+          unitCostPrice: { $ifNull: ["$unitCostPrice", "$product.costPrice"] },
+          profit: {
+            $subtract: [
+              "$totalPrice",
+              { $multiply: [{ $ifNull: ["$unitCostPrice", "$product.costPrice"] }, "$quantity"] },
+            ],
+          },
+        },
+      },
+
       {
         $group: {
           _id: null,
           revenue: { $sum: "$totalPrice" },
+          cost: { $sum: { $multiply: ["$unitCostPrice", "$quantity"] } },
           profit: { $sum: "$profit" },
         },
       },
     ]);
 
     const revenue = result[0]?.revenue || 0;
+    const cost = result[0]?.cost || 0;
     const profit = result[0]?.profit || 0;
-    const margin = revenue > 0 ? ((profit / revenue) * 100).toFixed(2) : 0;
+    const margin = revenue > 0 ? ((profit / revenue) * 100).toFixed(2) : "0.00";
 
-    res.json({ revenue, profit, margin });
+    res.json({ revenue, cost, profit, margin });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -115,28 +151,45 @@ exports.getProfit = async (req, res) => {
 exports.getProfitByProduct = async (req, res) => {
   try {
     const report = await Sale.aggregate([
-      { $match: { store: req.user._id } },
-      {
-        $group: {
-          _id: "$product",
-          revenue: { $sum: "$totalPrice" },
-          profit: { $sum: "$profit" },
-        },
-      },
+      { $match: { store: req.storeId } },
+
+      // Use product lookup for legacy sales without snapshots
       {
         $lookup: {
           from: "products",
-          localField: "_id",
+          localField: "product",
           foreignField: "_id",
           as: "product",
         },
       },
       { $unwind: "$product" },
+
+      {
+        $addFields: {
+          unitCostPrice: { $ifNull: ["$unitCostPrice", "$product.costPrice"] },
+          profit: {
+            $subtract: [
+              "$totalPrice",
+              { $multiply: [{ $ifNull: ["$unitCostPrice", "$product.costPrice"] }, "$quantity"] },
+            ],
+          },
+        },
+      },
+
+      {
+        $group: {
+          _id: "$product._id",
+          productName: { $first: "$product.name" },
+          revenue: { $sum: "$totalPrice" },
+          profit: { $sum: "$profit" },
+        },
+      },
+
       {
         $project: {
           _id: 0,
-          productId: "$product._id",
-          productName: "$product.name",
+          productId: "$_id",
+          productName: 1,
           revenue: 1,
           profit: 1,
         },
@@ -155,7 +208,7 @@ exports.getProfitByProduct = async (req, res) => {
 exports.getProfitByStaff = async (req, res) => {
   try {
     const data = await Sale.aggregate([
-      { $match: { store: req.user._id } },
+      { $match: { store: req.storeId } },
 
       {
         $lookup: {
@@ -169,10 +222,11 @@ exports.getProfitByStaff = async (req, res) => {
 
       {
         $addFields: {
+          unitCostPrice: { $ifNull: ["$unitCostPrice", "$product.costPrice"] },
           profit: {
             $subtract: [
               "$totalPrice",
-              { $multiply: ["$product.costPrice", "$quantity"] },
+              { $multiply: [{ $ifNull: ["$unitCostPrice", "$product.costPrice"] }, "$quantity"] },
             ],
           },
         },

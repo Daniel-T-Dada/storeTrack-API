@@ -1,13 +1,18 @@
 
 const express = require("express");
 const dotenv = require("dotenv");
-const mongoose = require("mongoose");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const swaggerJsdoc = require("swagger-jsdoc");
 const swaggerUi = require("swagger-ui-express");
+const path = require("path");
+const connectDB = require("./config/db");
+const { initCloudinary } = require("./config/cloudinary");
 
 dotenv.config();
 const app = express();
+
+initCloudinary();
 
 app.set("trust proxy", true);
 
@@ -62,19 +67,23 @@ app.use(cors(corsOptions));
 // Explicitly handle preflight (Express v5 doesn't accept "*" path here)
 app.options(/.*/, cors(corsOptions));
 
+// Cookies (needed for cookie-based auth)
+app.use(cookieParser());
+
 app.use(express.json());
 
-// Connect to MongoDB (serverless-friendly)
-let conn = null;
-async function connectDB() {
-  if (conn == null) {
-    conn = await mongoose.connect(process.env.MONGO_URI);
-    console.log("MongoDB connected");
+// Ensure DB is connected before handling routes (serverless-friendly cached connection).
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    next(err);
   }
-  return conn;
-}
+});
 
-connectDB().catch(err => console.error("MongoDB connection error:", err));
+// Kick off initial connection (non-blocking) to surface config issues early.
+connectDB().then(() => console.log("MongoDB connected")).catch(err => console.error("MongoDB connection error:", err));
 
 // Routes
 const joinBasePath = (basePath, subPath) => {
@@ -96,8 +105,10 @@ if (!apiBasePaths.includes("")) apiBasePaths.push("");
 
 for (const basePath of apiBasePaths) {
   app.use(joinBasePath(basePath, "/auth"), require("./routes/auth"));
+  app.use(joinBasePath(basePath, "/uploads"), require("./routes/uploads"));
   app.use(joinBasePath(basePath, "/products"), require("./routes/products"));
   app.use(joinBasePath(basePath, "/staff"), require("./routes/staff"));
+  app.use(joinBasePath(basePath, "/staff-auth"), require("./routes/staffAuth")); // Added staff auth route
   app.use(joinBasePath(basePath, "/sales"), require("./routes/sales"));
   app.use(joinBasePath(basePath, "/reports"), require("./routes/reports"));
 }
@@ -117,12 +128,161 @@ const swaggerOptions = {
           type: "http",
           scheme: "bearer",
           bearerFormat: "JWT",
+          description:
+            "JWT access token. Protected endpoints also accept an HttpOnly 'accessToken' cookie (cookie-based auth).",
+        },
+        cookieAuth: {
+          type: "apiKey",
+          in: "cookie",
+          name: "accessToken",
+          description:
+            "HttpOnly cookie-based auth. Sent automatically by the browser when using credentials (axios withCredentials / fetch credentials: include).",
+        },
+      },
+      schemas: {
+        TransactionSummary: {
+          type: "object",
+          properties: {
+            id: { type: "string", example: "65fae1c9d4..." },
+            createdAt: { type: "string", format: "date-time" },
+            lastCreatedAt: { type: "string", format: "date-time" },
+            staff: { type: "string", nullable: true, description: "Staff id" },
+            staffName: { type: "string", nullable: true },
+            itemsCount: { type: "number", example: 2 },
+            totalQuantity: { type: "number", example: 3 },
+            total: { type: "number", example: 1300 },
+          },
+        },
+        TransactionListResponse: {
+          type: "object",
+          properties: {
+            data: {
+              type: "array",
+              items: { $ref: "#/components/schemas/TransactionSummary" },
+            },
+            meta: {
+              type: "object",
+              properties: {
+                total: { type: "number" },
+                limit: { type: "number" },
+                page: { type: "number" },
+              },
+            },
+          },
+        },
+        TransactionDetailsResponse: {
+          type: "object",
+          properties: {
+            transaction: { $ref: "#/components/schemas/TransactionSummary" },
+            sales: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Sale" },
+            },
+          },
+        },
+        ReceiptLineItem: {
+          type: "object",
+          properties: {
+            saleId: { type: "string" },
+            productId: { type: "string" },
+            name: { type: "string" },
+            sku: { type: "string", nullable: true },
+            barcode: { type: "string", nullable: true },
+            unitPrice: { type: "number" },
+            quantity: { type: "number" },
+            total: { type: "number" },
+          },
+        },
+        TransactionReceiptResponse: {
+          type: "object",
+          properties: {
+            transaction: { $ref: "#/components/schemas/TransactionSummary" },
+            items: {
+              type: "array",
+              items: { $ref: "#/components/schemas/ReceiptLineItem" },
+            },
+          },
+        },
+        User: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "65fae1c9d4..." },
+            name: { type: "string", example: "Store Owner" },
+            email: { type: "string", example: "owner@example.com" },
+            role: { type: "string", enum: ["admin", "manager"], example: "admin" },
+            profileImage: {
+              type: "string",
+              nullable: true,
+              description: "Optional profile image URL or data URI",
+            },
+            store: { type: "string", nullable: true, example: "Zintra" },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        Staff: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "65fae1c9d4..." },
+            name: { type: "string", example: "Jane Doe" },
+            email: { type: "string", example: "jane@example.com" },
+            role: { type: "string", enum: ["admin", "manager", "staff"], example: "staff" },
+            profileImage: {
+              type: "string",
+              nullable: true,
+              description: "Optional profile image URL or data URI",
+            },
+            store: { type: "string", description: "Store owner (User) id" },
+            createdAt: { type: "string", format: "date-time" },
+          },
+        },
+        Product: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "65fae1c9d4..." },
+            name: { type: "string", example: "Milk" },
+            sku: { type: "string", nullable: true, example: "SKU-001" },
+            barcode: { type: "string", nullable: true, example: "1234567890123" },
+            price: { type: "number", example: 500 },
+            costPrice: { type: "number", example: 350 },
+            quantity: { type: "number", example: 10 },
+            lowStockThreshold: { type: "number", example: 5 },
+            isLowStock: { type: "boolean", example: false },
+            description: { type: "string", nullable: true },
+            store: { type: "string", description: "Store owner (User) id" },
+            createdAt: { type: "string", format: "date-time" },
+          },
+        },
+        Sale: {
+          type: "object",
+          properties: {
+            _id: { type: "string", example: "65fae1c9d4..." },
+            transactionId: { type: "string", nullable: true },
+            product: { oneOf: [{ type: "string" }, { $ref: "#/components/schemas/Product" }] },
+            productNameSnapshot: { type: "string", nullable: true },
+            unitPrice: { type: "number", nullable: true },
+            unitCostPrice: { type: "number", nullable: true },
+            staff: { oneOf: [{ type: "string" }, { $ref: "#/components/schemas/Staff" }] },
+            quantity: { type: "number", example: 2 },
+            totalPrice: { type: "number", example: 1000 },
+            store: { type: "string", description: "Store owner (User) id" },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        Tokens: {
+          type: "object",
+          properties: {
+            accessToken: { type: "string" },
+            refreshToken: { type: "string" },
+          },
         },
       },
     },
-    security: [{ bearerAuth: [] }],
   },
-  apis: ["./routes/*.js"],
+  // Use absolute glob so swagger-jsdoc consistently finds route annotations
+  // regardless of current working directory (Windows/Vercel/serverless).
+  apis: [path.join(__dirname, "routes", "*.js").replace(/\\/g, "/")],
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
@@ -134,15 +294,25 @@ const redirectToTrailingSlash = (req, res) => {
   res.redirect(301, target);
 };
 
-app.get(["/api-docs", "/api/api-docs"], redirectToTrailingSlash);
+// Serve Swagger under all configured API base paths.
+// This avoids "Swagger not showing" issues on platforms like Vercel when routes are accessed via
+// different prefixes (e.g. /api/*, /*, or a custom API_BASE_PATH like /5000/*).
+const docsBasePaths = Array.from(new Set(["", ...apiBasePaths]));
 
-// Expose raw spec for debugging (useful on serverless/proxies)
-app.get(["/api-docs/swagger.json", "/api/api-docs/swagger.json"], (req, res) => {
-  res.json(swaggerDocs);
-});
+for (const basePath of docsBasePaths) {
+  const docsPath = joinBasePath(basePath, "/api-docs");
+  const specPath = joinBasePath(basePath, "/api-docs/swagger.json");
 
-// Serve Swagger UI from common base paths
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+  app.get([docsPath], redirectToTrailingSlash);
+
+  // Expose raw spec for debugging (useful on serverless/proxies)
+  app.get([specPath], (req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json(swaggerDocs);
+  });
+
+  app.use(docsPath, swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+}
 
 // Welcome route
 app.get("/", (req, res) => {
@@ -189,8 +359,28 @@ app.use((req, res) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ message: "Something went wrong!", error: err.message });
+  const isProd = process.env.NODE_ENV === "production";
+  const status = Number(err?.status || err?.statusCode || 500);
+
+  // Handle malformed JSON bodies
+  if (err instanceof SyntaxError && "body" in err) {
+    return res.status(400).json({
+      message: "Validation error",
+      errors: [{ msg: "Invalid JSON body", path: "body" }],
+    });
+  }
+
+  const message = status >= 500 ? "Server error" : (err.message || "Request error");
+
+  if (!isProd) {
+    console.error(err);
+  }
+
+  res.status(status).json({
+    message,
+    code: err?.code,
+    details: err?.details,
+  });
 });
 
 // Export for Vercel serverless

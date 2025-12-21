@@ -1,9 +1,13 @@
-@baseUrl = https://store-track-api.vercel.app
-# @baseUrl = http://localhost:5000
+# @baseUrl = https://store-track-api.vercel.app
+@baseUrl = http://localhost:5000
 
-@email = online@example.com
+@email = zintra@cth.com
 @password = secure1234
-@storeId = 507f1f77bcf86cd799439011
+@storeId = 8765412345678909
+
+# Staff test credentials (must be unique per store)
+@staffEmail = staffzintra@cth.com
+@staffPassword = secure1234
 
 
 ### Register (may return 400 if user exists)
@@ -11,7 +15,7 @@ POST {{baseUrl}}/api/auth/register
 Content-Type: application/json
 
 {
-  "name": "Test",
+  "name": "Zintra",
   "email": "{{email}}",
   "password": "{{password}}",
   "store": "{{storeId}}"
@@ -27,6 +31,11 @@ Content-Type: application/json
   "email": "{{email}}",
   "password": "{{password}}"
 }
+
+
+### Me (sanity)
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
 
 
 ### Refresh token
@@ -45,12 +54,12 @@ Authorization: Bearer {{login.response.body.tokens.accessToken}}
 Content-Type: application/json
 
 {
-  "name": "Milk",
-  "price": 500,
-  "costPrice": 350,
+  "name": "Bottle of Groundnuts",
+  "price": 600,
+  "costPrice": 200,
   "quantity": 10,
   "lowStockThreshold": 5,
-  "description": "Fresh milk"
+  "description": "Groundnuts in a bottle"
 }
 
 
@@ -65,7 +74,7 @@ Authorization: Bearer {{login.response.body.tokens.accessToken}}
 Content-Type: application/json
 
 {
-  "price": 550,
+  # "price": 550,
   "quantity": 15,
   "description": "Updated description"
 }
@@ -78,9 +87,40 @@ Authorization: Bearer {{login.response.body.tokens.accessToken}}
 Content-Type: application/json
 
 {
-  "name": "Jane",
-  "role": "cashier"
+  "name": "Bose",
+  "email": "{{staffEmail}}",
+  "password": "{{staffPassword}}",
+  "role": "staff"
 }
+
+
+### Cloudinary signed params (direct-to-cloud helper)
+# @name cloudinarySignature
+POST {{baseUrl}}/api/uploads/cloudinary-signature
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Persist profile image after direct Cloudinary upload
+# 1) Upload image directly to Cloudinary using the signature response.
+# 2) Take Cloudinary's `public_id` and paste it below.
+PUT {{baseUrl}}/api/auth/me/profile-image
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+Content-Type: application/json
+
+{
+  "profileImagePublicId": "{{cloudinarySignature.response.body.folder}}/{{cloudinarySignature.response.body.publicId}}"
+}
+
+
+### Remove profile image
+DELETE {{baseUrl}}/api/auth/me/profile-image
+Authorization: Bearer {{login.response.body.tokens.accessToken}}
+
+
+### Upload profile image via API (multipart fallback)
+# NOTE: VS Code REST Client doesn't have a great built-in file picker.
+# If you want to test multipart quickly, use curl instead:
+# curl -X POST {{baseUrl}}/api/auth/me/profile-image -H "Authorization: Bearer <token>" -F "file=@C:\\path\\to\\photo.jpg"
 
 
 ### List staff
@@ -96,8 +136,7 @@ Content-Type: application/json
 {
   "product": "{{createProduct.response.body._id}}",
   "staff": "{{createStaff.response.body._id}}",
-  "quantity": 2,
-  "totalPrice": 1000
+  "quantity": 2
 }
 
 
