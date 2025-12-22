@@ -11,11 +11,31 @@ const { authMiddleware } = require("../middleware/auth");
 const { body, validationResult } = require("express-validator");
 const multer = require("multer");
 const { cloudinary, ensureCloudinaryConfigured, uploadBufferToCloudinary } = require("../config/cloudinary");
+const { sendPasswordResetEmail, buildResetUrl, sendEmailVerificationOtp } = require("../config/email");
 
 const normalizeValidationErrors = (items) =>
   items.map((e) => ({ msg: e.msg, path: e.path || e.param }));
 
 const isProd = process.env.NODE_ENV === "production";
+
+const generateEmailOtp6 = () => {
+  const n = crypto.randomInt(0, 1000000);
+  return String(n).padStart(6, "0");
+};
+
+const hashToken = (token) => crypto.createHash("sha256").update(String(token)).digest("hex");
+
+const getEmailOtpTtlMs = () => {
+  const minutes = Number(process.env.EMAIL_VERIFICATION_OTP_TTL_MINUTES || 10);
+  if (!Number.isFinite(minutes) || minutes <= 0) return 10 * 60 * 1000;
+  return minutes * 60 * 1000;
+};
+
+const getEmailOtpMaxAttempts = () => {
+  const n = Number(process.env.EMAIL_VERIFICATION_OTP_MAX_ATTEMPTS || 5);
+  if (!Number.isFinite(n) || n <= 0) return 5;
+  return Math.floor(n);
+};
 
 const buildCookieOptions = (maxAgeMs) => ({
   httpOnly: true,
@@ -73,7 +93,7 @@ const generateTokens = (user) => {
  *   post:
  *     summary: Register a store admin
  *     tags: [Auth]
- *     description: "On success, returns tokens and sets HttpOnly cookies: accessToken + refreshToken."
+ *     description: "Alias of /api/auth/register-send-otp. Creates an account and sends a 6-digit email verification code (OTP). Login is blocked until verified."
  *     security: []
  *     requestBody:
  *       required: true
@@ -97,13 +117,13 @@ const generateTokens = (user) => {
  *                 example: 1234567890987654
  *     responses:
  *       201:
- *         description: User registered successfully
+ *         description: Account created; verification OTP sent
  *       400:
  *         description: User already exists
  *       500:
  *         description: Server error
  */
-router.post("/register", async (req, res) => {
+const registerAndSendOtpHandler = async (req, res) => {
   try {
     const { name, email, password, store } = req.body ?? {};
 
@@ -128,29 +148,274 @@ router.post("/register", async (req, res) => {
       }
     }
 
+    const normalizedEmail = String(email).toLowerCase().trim();
+
     // Check if user exists
-    const existing = await User.findOne({ email });
+    const existing = await User.findOne({ email: normalizedEmail });
     if (existing) return res.status(400).json({ message: "User already exists" });
 
     // Create user
-    const user = await User.create({ name, email, password, store });
+    const user = await User.create({ name, email: normalizedEmail, password, store, isEmailVerified: false });
 
-    // Generate tokens
+    // Send email verification OTP
+    const otp = generateEmailOtp6();
+    user.emailVerificationCodeHash = hashToken(otp);
+    user.emailVerificationExpires = new Date(Date.now() + getEmailOtpTtlMs());
+    user.emailVerificationAttempts = 0;
+    await user.save();
+
+    try {
+      await sendEmailVerificationOtp({ to: normalizedEmail, otp });
+    } catch (mailErr) {
+      // In prod: don't leak mail config details. In dev: surface errors to help setup.
+      if (!isProd) {
+        return res.status(500).json({
+          message: "Failed to send verification email",
+          code: mailErr?.code,
+          details: mailErr?.message,
+        });
+      }
+    }
+
+    const response = {
+      message: "Account created. Verification code sent to email.",
+      requiresEmailVerification: true,
+    };
+
+    // Dev/testing helper: opt-in to returning OTP for local automation (never enable in prod).
+    const allowReturnOtp = String(process.env.RETURN_EMAIL_OTP || "").toLowerCase() === "true";
+    if (!isProd && allowReturnOtp) {
+      response.verificationOtp = otp;
+    }
+
+    res.status(201).json(response);
+  } catch (err) {
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+router.post("/register", registerAndSendOtpHandler);
+router.post("/register-send-otp", registerAndSendOtpHandler);
+
+/**
+ * @swagger
+ * /api/auth/register-send-otp:
+ *   post:
+ *     summary: Register and send OTP (combined)
+ *     tags: [Auth]
+ *     description: "Alias of /api/auth/register. Creates an account and sends a 6-digit email verification OTP."
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, email, password, store]
+ *             properties:
+ *               name:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               store:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Account created; verification OTP sent
+ */
+
+
+/**
+ * @swagger
+ * /api/auth/verify-email:
+ *   post:
+ *     summary: Verify email with a 6-digit OTP
+ *     tags: [Auth]
+ *     description: "Alias of /api/auth/verify-otp-login. Verifies the code and logs the user in (returns tokens + sets cookies)."
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, code]
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 example: online@example.com
+ *               code:
+ *                 type: string
+ *                 example: "123456"
+ *     responses:
+ *       200:
+ *         description: Email verified; returns tokens and sets cookies.
+ *       400:
+ *         description: Invalid/expired code
+ *       429:
+ *         description: Too many attempts
+ */
+const verifyEmailAndLoginHandler = async (req, res) => {
+  const { email, code } = req.body ?? {};
+  if (!email || !code) {
+    const errors = [];
+    if (!email) errors.push({ msg: "email is required", path: "email" });
+    if (!code) errors.push({ msg: "code is required", path: "code" });
+    return res.status(400).json({ message: "Validation error", errors });
+  }
+
+  try {
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const submitted = String(code).trim();
+
+    const user = await User.findOne({ email: normalizedEmail }).select(
+      "+emailVerificationCodeHash +emailVerificationExpires +emailVerificationAttempts +refreshToken"
+    );
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired verification code" });
+    }
+
+    if (user.isEmailVerified) {
+      const tokens = generateTokens(user);
+      setAuthCookies(res, tokens);
+      user.refreshToken = tokens.refreshToken;
+      await user.save();
+      const { password: pwd, ...userData } = user.toObject();
+      return res.json({ message: "Email already verified", user: userData, tokens });
+    }
+
+    const maxAttempts = getEmailOtpMaxAttempts();
+    if ((user.emailVerificationAttempts || 0) >= maxAttempts) {
+      return res.status(429).json({ message: "Too many attempts. Please request a new code." });
+    }
+
+    if (!user.emailVerificationCodeHash || !user.emailVerificationExpires) {
+      return res.status(400).json({ message: "Invalid or expired verification code" });
+    }
+
+    if (user.emailVerificationExpires.getTime() < Date.now()) {
+      return res.status(400).json({ message: "Invalid or expired verification code" });
+    }
+
+    const expectedHash = user.emailVerificationCodeHash;
+    const submittedHash = hashToken(submitted);
+    if (submittedHash !== expectedHash) {
+      user.emailVerificationAttempts = (user.emailVerificationAttempts || 0) + 1;
+      await user.save();
+      return res.status(400).json({ message: "Invalid or expired verification code" });
+    }
+
+    user.isEmailVerified = true;
+    user.emailVerificationCodeHash = undefined;
+    user.emailVerificationExpires = undefined;
+    user.emailVerificationAttempts = 0;
+
     const tokens = generateTokens(user);
-
-    // Cookie-based auth support (also still returns JSON)
     setAuthCookies(res, tokens);
-
-    // Store refresh token in user record
     user.refreshToken = tokens.refreshToken;
     await user.save();
 
-    // Exclude password before sending response
     const { password: pwd, ...userData } = user.toObject();
-
-    res.status(201).json({ user: userData, tokens });
+    return res.json({ message: "Email verified", user: userData, tokens });
   } catch (err) {
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+router.post("/verify-email", verifyEmailAndLoginHandler);
+router.post("/verify-otp-login", verifyEmailAndLoginHandler);
+
+/**
+ * @swagger
+ * /api/auth/verify-otp-login:
+ *   post:
+ *     summary: Verify OTP and login (combined)
+ *     tags: [Auth]
+ *     description: "Alias of /api/auth/verify-email. Verifies the 6-digit OTP and returns tokens (logs the user in)."
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, code]
+ *             properties:
+ *               email:
+ *                 type: string
+ *               code:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Email verified; returns tokens and sets cookies.
+ */
+
+/**
+ * @swagger
+ * /api/auth/resend-verification:
+ *   post:
+ *     summary: Resend email verification OTP
+ *     tags: [Auth]
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 example: online@example.com
+ *     responses:
+ *       200:
+ *         description: Always returns a generic message.
+ */
+router.post("/resend-verification", async (req, res) => {
+  const { email } = req.body ?? {};
+  if (!email) return res.status(400).json({ message: "Email is required" });
+
+  try {
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const user = await User.findOne({ email: normalizedEmail }).select(
+      "+emailVerificationCodeHash +emailVerificationExpires +emailVerificationAttempts"
+    );
+
+    // Generic response to avoid enumeration.
+    if (!user) return res.json({ message: "If the email exists, a verification code will be sent." });
+    if (user.isEmailVerified) return res.json({ message: "If the email exists, a verification code will be sent." });
+
+    const otp = generateEmailOtp6();
+    user.emailVerificationCodeHash = hashToken(otp);
+    user.emailVerificationExpires = new Date(Date.now() + getEmailOtpTtlMs());
+    user.emailVerificationAttempts = 0;
+    await user.save();
+
+    try {
+      await sendEmailVerificationOtp({ to: normalizedEmail, otp });
+    } catch (mailErr) {
+      if (!isProd) {
+        return res.status(500).json({
+          message: "Failed to send verification email",
+          code: mailErr?.code,
+          details: mailErr?.message,
+        });
+      }
+    }
+
+    const response = { message: "If the email exists, a verification code will be sent." };
+    const allowReturnOtp = String(process.env.RETURN_EMAIL_OTP || "").toLowerCase() === "true";
+    if (!isProd && allowReturnOtp) {
+      response.verificationOtp = otp;
+    }
+
+    return res.json(response);
+  } catch (err) {
+    return res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -160,7 +425,7 @@ router.post("/register", async (req, res) => {
  *   post:
  *     summary: Login a store admin
  *     tags: [Auth]
- *     description: "On success, returns tokens and sets HttpOnly cookies: accessToken + refreshToken."
+ *     description: "On success, returns tokens and sets HttpOnly cookies: accessToken + refreshToken. Requires verified email."
  *     security: []
  *     requestBody:
  *       required: true
@@ -179,6 +444,8 @@ router.post("/register", async (req, res) => {
  *     responses:
  *       200:
  *         description: Login successful
+ *       403:
+ *         description: Email not verified
  *       400:
  *         description: Invalid credentials
  *       500:
@@ -195,11 +462,19 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "Validation error", errors });
     }
 
-    const user = await User.findOne({ email }).select("+password +refreshToken");
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const user = await User.findOne({ email: normalizedEmail }).select("+password +refreshToken");
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
+
+    if (!user.isEmailVerified) {
+      return res.status(403).json({
+        message: "Email not verified",
+        hint: "Verify your email with the OTP sent to your inbox, or request a new code via /api/auth/resend-verification.",
+      });
+    }
 
     const tokens = generateTokens(user);
 
@@ -263,6 +538,10 @@ router.post("/refresh", async (req, res) => {
     if (!user || user.refreshToken !== refreshToken)
       return res.status(401).json({ message: "Invalid refresh token" });
 
+    if (!user.isEmailVerified) {
+      return res.status(403).json({ message: "Email not verified" });
+    }
+
     // Generate new tokens
     const tokens = generateTokens(user);
 
@@ -299,7 +578,7 @@ router.post("/refresh", async (req, res) => {
  *                 example: online@example.com
  *     responses:
  *       200:
- *         description: Always returns a generic message. (In this implementation, also returns resetToken/resetPath for testing.)
+ *         description: Always returns a generic message. In non-production, when RETURN_RESET_TOKEN=true, also returns resetToken/resetUrl/resetPath for local testing.
  *       400:
  *         description: Email is required
  *       500:
@@ -309,15 +588,16 @@ router.post("/refresh", async (req, res) => {
 /**
  * Forgot password
  * Generates a one-time reset token and stores its hash + expiry.
- * NOTE: This implementation returns the token in the response for easy frontend integration.
- * In a real production setup, you should email the reset link instead and NOT return the token.
+ * Always returns a generic message to avoid account enumeration.
+ * In non-production, you can opt-in to returning the token/URL via RETURN_RESET_TOKEN=true.
  */
 router.post("/forgot-password", async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: "Email is required" });
 
   try {
-    const user = await User.findOne({ email }).select("+resetPasswordToken +resetPasswordExpires");
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const user = await User.findOne({ email: normalizedEmail }).select("+resetPasswordToken +resetPasswordExpires");
 
     // Always respond with success message to avoid account enumeration
     if (!user) {
@@ -331,13 +611,32 @@ router.post("/forgot-password", async (req, res) => {
     user.resetPasswordExpires = new Date(Date.now() + 1000 * 60 * 30); // 30 minutes
     await user.save();
 
-    const resetPath = `/api/auth/reset-password/${resetToken}`;
+    let resetUrl = null;
+    try {
+      const sent = await sendPasswordResetEmail({ to: normalizedEmail, resetToken, req });
+      resetUrl = sent?.resetUrl ?? null;
+    } catch (mailErr) {
+      // In production, do not leak whether email exists or whether mail is configured.
+      // But do surface the server-side issue for debugging in non-prod.
+      if (!isProd) {
+        return res.status(500).json({
+          message: "Failed to send reset email",
+          code: mailErr?.code,
+          details: mailErr?.message,
+          resetUrl: buildResetUrl(resetToken, req),
+        });
+      }
+    }
 
-    res.json({
-      message: "If the email exists, a reset link will be sent.",
-      resetToken,
-      resetPath,
-    });
+    const allowReturnToken = String(process.env.RETURN_RESET_TOKEN || "").toLowerCase() === "true";
+    const response = { message: "If the email exists, a reset link will be sent." };
+    if (!isProd && allowReturnToken) {
+      response.resetToken = resetToken;
+      response.resetUrl = resetUrl || buildResetUrl(resetToken, req);
+      response.resetPath = `/api/auth/reset-password/${resetToken}`;
+    }
+
+    res.json(response);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

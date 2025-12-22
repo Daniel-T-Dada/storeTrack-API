@@ -1,0 +1,11 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "pnpm test",
+			"type": "shell",
+			"command": "pnpm -s test",
+			"isBackground": false
+		}
+	]
+}

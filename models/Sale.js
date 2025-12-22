@@ -23,7 +23,19 @@ const saleSchema = new mongoose.Schema(
     staff: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Staff",
-      required: true,
+      required: false,
+    },
+    cashierType: {
+      type: String,
+      enum: ["staff", "user"],
+      default: "staff",
+    },
+    cashierUser: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    cashierNameSnapshot: {
+      type: String,
     },
     quantity: {
       type: Number,
@@ -44,5 +56,6 @@ const saleSchema = new mongoose.Schema(
 
 saleSchema.index({ store: 1, createdAt: -1 });
 saleSchema.index({ store: 1, staff: 1, createdAt: -1 });
+saleSchema.index({ store: 1, cashierUser: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Sale", saleSchema);

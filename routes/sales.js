@@ -24,6 +24,10 @@ const normalizeValidationErrors = (errorsResult) =>
  *   post:
  *     summary: Record a sale and update stock
  *     tags: [Sales]
+ *     description: |
+ *       Cashier attribution rules:
+ *       - Staff tokens: sale is tied to the logged-in staff (request body `staff` is ignored).
+ *       - Admin/manager user tokens: sale is tied to the logged-in user (do NOT send `staff`).
  *     security:
  *       - bearerAuth: []
  *       - cookieAuth: []
@@ -45,7 +49,8 @@ const normalizeValidationErrors = (errorsResult) =>
  *                 description: Quantity being sold
  *               staff:
  *                 type: string
- *                 description: Staff ID. Required for admin/manager; ignored when the logged-in user is staff (auto-assigned).
+ *                 deprecated: true
+ *                 description: Deprecated. Do not send. Sales are attributed automatically based on the authenticated account.
  *     responses:
  *       201:
  *         description: Sale recorded successfully
@@ -63,7 +68,12 @@ const normalizeValidationErrors = (errorsResult) =>
  *   post:
  *     summary: Checkout multiple items (atomic)
  *     tags: [Sales]
- *     description: Creates one transaction with multiple line items. Stock deductions and sale creation are atomic.
+ *     description: |
+ *       Creates one transaction with multiple line items. Stock deductions and sale creation are atomic.
+ *
+ *       Cashier attribution rules:
+ *       - Staff tokens: checkout is tied to the logged-in staff (request body `staff` is ignored).
+ *       - Admin/manager user tokens: checkout is tied to the logged-in user (do NOT send `staff`).
  *     security:
  *       - bearerAuth: []
  *       - cookieAuth: []
@@ -89,7 +99,8 @@ const normalizeValidationErrors = (errorsResult) =>
  *                       minimum: 1
  *               staff:
  *                 type: string
- *                 description: Required for admin/manager; ignored for staff users.
+ *                 deprecated: true
+ *                 description: Deprecated. Do not send. Checkout is attributed automatically based on the authenticated account.
  *               client:
  *                 type: object
  *                 properties:
@@ -141,20 +152,29 @@ router.post(
         });
       }
 
-      let staffId = req.body.staff;
+      let staffId = null;
+      let cashierType = "user";
+      let cashierUser = null;
+      let cashierNameSnapshot = null;
 
       // Staff users: always auto-assign
       if (req.userType === "staff") {
         staffId = req.user._id;
+        cashierType = "staff";
+        cashierUser = null;
+        cashierNameSnapshot = req.user?.name || null;
       } else {
-        // Admin/manager: staff is required and must belong to store
-        if (!staffId) {
-          return res.status(400).json({ message: "Staff ID is required for admin/manager" });
+        // Admin/manager: record as the logged-in user (no staff attribution)
+        if (req.body.staff) {
+          return res.status(400).json({
+            message: "Validation error",
+            errors: [{ msg: "Do not provide staff when recording sales as admin/manager", path: "staff" }],
+          });
         }
-        const staffDoc = await Staff.findOne({ _id: staffId, store: req.storeId });
-        if (!staffDoc) {
-          return res.status(400).json({ message: "Invalid staff ID for this store" });
-        }
+
+        cashierType = "user";
+        cashierUser = req.user?._id || null;
+        cashierNameSnapshot = req.user?.name || null;
       }
 
       const transactionId = new mongoose.Types.ObjectId();
@@ -220,6 +240,9 @@ router.post(
             unitPrice,
             unitCostPrice,
             staff: staffId,
+            cashierType,
+            cashierUser,
+            cashierNameSnapshot,
             quantity: qty,
             totalPrice,
             store: req.storeId,
@@ -237,6 +260,10 @@ router.post(
         transaction: {
           id: transactionId,
           staff: staffId,
+          staffName: cashierNameSnapshot,
+          cashierType,
+          cashierUser,
+          cashierName: cashierNameSnapshot,
           itemsCount: merged.size,
           total: serverTotal,
           createdAt: createdSales[0]?.createdAt || new Date(),
@@ -277,20 +304,28 @@ router.post(
 
     try {
       const { product, quantity } = req.body;
-      let staffId = req.body.staff;
+      let staffId = null;
+      let cashierType = "user";
+      let cashierUser = null;
+      let cashierNameSnapshot = null;
 
       // Auto-assign staff if logged-in user is staff
       if (req.userType === "staff") {
         staffId = req.user._id;
+        cashierType = "staff";
+        cashierUser = null;
+        cashierNameSnapshot = req.user?.name || null;
       } else {
-        if (!staffId) {
-          return res.status(400).json({ message: "Staff ID is required for admin/manager" });
+        // Admin/manager: record as the logged-in user (no staff attribution)
+        if (req.body.staff) {
+          return res.status(400).json({
+            message: "Validation error",
+            errors: [{ msg: "Do not provide staff when recording sales as admin/manager", path: "staff" }],
+          });
         }
-
-        const staffDoc = await Staff.findOne({ _id: staffId, store: req.storeId });
-        if (!staffDoc) {
-          return res.status(400).json({ message: "Invalid staff ID for this store" });
-        }
+        cashierType = "user";
+        cashierUser = req.user?._id || null;
+        cashierNameSnapshot = req.user?.name || null;
       }
 
       // Atomically decrement stock if enough quantity exists
@@ -339,6 +374,9 @@ router.post(
         unitPrice,
         unitCostPrice,
         staff: staffId,
+        cashierType,
+        cashierUser,
+        cashierNameSnapshot,
         quantity,
         totalPrice,
         store: req.storeId,
@@ -431,6 +469,9 @@ router.get("/transactions", authMiddleware, roleMiddleware(["admin", "manager", 
         $group: {
           _id: "$txId",
           staff: { $first: "$staff" },
+          cashierType: { $first: "$cashierType" },
+          cashierUser: { $first: "$cashierUser" },
+          cashierNameSnapshot: { $first: "$cashierNameSnapshot" },
           createdAt: { $min: "$createdAt" },
           lastCreatedAt: { $max: "$createdAt" },
           total: { $sum: "$totalPrice" },
@@ -452,13 +493,22 @@ router.get("/transactions", authMiddleware, roleMiddleware(["admin", "manager", 
                 as: "staffDoc",
               },
             },
-            { $addFields: { staffName: { $arrayElemAt: ["$staffDoc.name", 0] } } },
+            {
+              $addFields: {
+                staffName: {
+                  $ifNull: ["$cashierNameSnapshot", { $arrayElemAt: ["$staffDoc.name", 0] }],
+                },
+              },
+            },
             {
               $project: {
                 _id: 0,
                 id: { $toString: "$_id" },
                 staff: { $toString: "$staff" },
                 staffName: 1,
+                cashierType: { $ifNull: ["$cashierType", "staff"] },
+                cashierUser: { $toString: "$cashierUser" },
+                cashierName: { $ifNull: ["$cashierNameSnapshot", "$staffName"] },
                 createdAt: 1,
                 lastCreatedAt: 1,
                 total: 1,
@@ -549,12 +599,18 @@ router.get(
       const lastCreatedAt = sales[sales.length - 1].createdAt;
 
       const firstStaff = sales[0].staff;
+      const firstCashierType = sales[0].cashierType || (firstStaff ? "staff" : "user");
+      const firstCashierUser = sales[0].cashierUser || null;
+      const firstCashierName = sales[0].cashierNameSnapshot || firstStaff?.name || null;
 
       res.json({
         transaction: {
           id: String(txKey),
           staff: firstStaff?._id ? String(firstStaff._id) : String(firstStaff),
-          staffName: firstStaff?.name,
+          staffName: firstCashierName,
+          cashierType: firstCashierType,
+          cashierUser: firstCashierUser ? String(firstCashierUser) : null,
+          cashierName: firstCashierName,
           itemsCount: sales.length,
           totalQuantity,
           total,
@@ -627,6 +683,9 @@ router.get(
       const lastCreatedAt = sales[sales.length - 1].createdAt;
 
       const firstStaff = sales[0].staff;
+      const firstCashierType = sales[0].cashierType || (firstStaff ? "staff" : "user");
+      const firstCashierUser = sales[0].cashierUser || null;
+      const firstCashierName = sales[0].cashierNameSnapshot || firstStaff?.name || null;
 
       const lineItems = sales.map((s) => {
         const product = s.product;
@@ -658,7 +717,10 @@ router.get(
           createdAt,
           lastCreatedAt,
           staff: firstStaff?._id ? String(firstStaff._id) : String(firstStaff),
-          staffName: firstStaff?.name,
+          staffName: firstCashierName,
+          cashierType: firstCashierType,
+          cashierUser: firstCashierUser ? String(firstCashierUser) : null,
+          cashierName: firstCashierName,
           itemsCount: lineItems.length,
           totalQuantity,
           total: receiptTotal,

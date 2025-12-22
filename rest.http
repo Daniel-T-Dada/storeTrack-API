@@ -11,7 +11,7 @@
 
 
 ### Register (may return 400 if user exists)
-POST {{baseUrl}}/api/auth/register
+POST {{baseUrl}}/api/auth/register-send-otp
 Content-Type: application/json
 
 {
@@ -19,6 +19,18 @@ Content-Type: application/json
   "email": "{{email}}",
   "password": "{{password}}",
   "store": "{{storeId}}"
+}
+
+
+### Verify email (OTP)
+# After registration, check your inbox for the 6-digit code.
+# @name verifyEmail
+POST {{baseUrl}}/api/auth/verify-otp-login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "code": "123456"
 }
 
 
@@ -48,7 +60,9 @@ Content-Type: application/json
 }
 
 
-### Forgot password (returns reset token for testing)
+### Forgot password
+# In production this emails a reset link and does NOT return a token.
+# Dev/testing: set RETURN_RESET_TOKEN=true (and NODE_ENV != production) to also get resetToken/resetUrl in the response.
 # @name forgotPassword
 POST {{baseUrl}}/api/auth/forgot-password
 Content-Type: application/json
@@ -58,7 +72,9 @@ Content-Type: application/json
 }
 
 
-### Reset password (uses token from forgot-password)
+### Reset password
+# Token comes from the email link (frontend route) in production.
+# For local testing with RETURN_RESET_TOKEN=true, you can use forgotPassword.response.body.resetToken.
 POST {{baseUrl}}/api/auth/reset-password/{{forgotPassword.response.body.resetToken}}
 Content-Type: application/json
 
@@ -202,7 +218,8 @@ Authorization: Bearer {{login.response.body.tokens.accessToken}}
 
 
 ### Record sale
-# Note: For admin/manager, staff is required. For staff users, staff is auto-assigned.
+# Staff users: staff is auto-assigned.
+# Admin/manager users: do NOT send staff; sale is attributed to the logged-in user.
 # @name createSale
 POST {{baseUrl}}/api/sales
 Authorization: Bearer {{login.response.body.tokens.accessToken}}
@@ -210,7 +227,6 @@ Content-Type: application/json
 
 {
   "product": "{{createProduct.response.body._id}}",
-  "staff": "{{createStaff.response.body._id}}",
   "quantity": 2
 }
 
@@ -222,7 +238,6 @@ Authorization: Bearer {{login.response.body.tokens.accessToken}}
 Content-Type: application/json
 
 {
-  "staff": "{{createStaff.response.body._id}}",
   "items": [
     {
       "product": "{{createProduct.response.body._id}}",

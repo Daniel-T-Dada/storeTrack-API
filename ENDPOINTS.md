@@ -64,7 +64,8 @@ Legend: ✅ allowed, ❌ not allowed, 🔒 scope limited.
 
 ### Register
 
-- **POST** `/api/auth/register`
+- **POST** `/api/auth/register-send-otp` (preferred)
+- Alias: `/api/auth/register`
 - Auth: No
 - Body (JSON)
 
@@ -79,8 +80,43 @@ Legend: ✅ allowed, ❌ not allowed, 🔒 scope limited.
 
 Response:
 
+- Sends a 6-digit OTP to the provided email.
+- Returns `{ message, requiresEmailVerification: true }`
+
+Notes:
+
+- Login is blocked until the email is verified.
+
+### Verify email (OTP)
+
+- **POST** `/api/auth/verify-otp-login` (preferred)
+- Alias: `/api/auth/verify-email`
+- Auth: No
+- Body (JSON)
+
+```json
+{ "email": "online@example.com", "code": "123456" }
+```
+
+Response:
+
+- Marks the account as verified
 - Sets cookies: `accessToken`, `refreshToken`
-- Returns `{ user, tokens: { accessToken, refreshToken } }`
+- Returns `{ message, user, tokens }`
+
+### Resend verification OTP
+
+- **POST** `/api/auth/resend-verification`
+- Auth: No
+- Body (JSON)
+
+```json
+{ "email": "online@example.com" }
+```
+
+Response:
+
+- Always returns a generic message to avoid account enumeration.
 
 ### Login
 
@@ -100,6 +136,10 @@ Response:
 - Sets cookies: `accessToken`, `refreshToken`
 - Returns `{ user, tokens: { accessToken, refreshToken } }`
 
+Notes:
+
+- Returns `403` if the account email is not verified.
+
 ### Refresh
 
 - **POST** `/api/auth/refresh`
@@ -114,6 +154,40 @@ Response:
 
 - Rotates tokens, re-sets cookies
 - Returns `{ tokens: { accessToken, refreshToken } }`
+
+### Forgot password
+
+- **POST** `/api/auth/forgot-password`
+- Auth: No
+- Body (JSON)
+
+```json
+{ "email": "online@example.com" }
+```
+
+Response:
+
+- Always returns a generic message to avoid account enumeration.
+- If SMTP is configured, the API sends a reset link to the email.
+
+Dev/testing:
+
+- If `RETURN_RESET_TOKEN=true` and `NODE_ENV` is not `production`, the API also returns `resetToken` and `resetUrl` for local testing.
+
+### Reset password
+
+- **POST** `/api/auth/reset-password/:token`
+- Auth: No
+- Body (JSON)
+
+```json
+{ "password": "newStrongPassword" }
+```
+
+Notes:
+
+- Reset tokens expire after 30 minutes.
+- Password must be at least 6 characters.
 
 ### Me
 
